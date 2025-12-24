@@ -1,210 +1,252 @@
 package com.example.taskmanagement.service;
 
-
 import com.example.taskmanagement.entity.Task;
 import com.example.taskmanagement.entity.Tag;
 import com.example.taskmanagement.entity.User;
+import com.example.taskmanagement.entity.TaskSearchDTO;
 import com.example.taskmanagement.repository.TaskRepository;
 import com.example.taskmanagement.repository.TagRepository;
 import com.example.taskmanagement.repository.UserRepository;
+import com.example.taskmanagement.specification.TaskSpecification;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
-import org.springframework.data.domain.Sort;
+import org.springframework.data.jpa.domain.Specification;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import java.time.LocalDateTime;
+import org.springframework.transaction.annotation.Propagation;
 import java.util.List;
 import java.util.Optional;
-import java.util.Map;
-import java.util.HashMap;
 
 @Service
 public class TaskService {
-    
+
     @Autowired
     private TaskRepository taskRepository;
-    
+
     @Autowired
     private UserRepository userRepository;
-    
+
     @Autowired
     private TagRepository tagRepository;
-    
-    // Basic CRUD (same as before)
+
+    // ========================================
+    // TRANSACTION EXAMPLES
+    // ========================================
+
+    // Default transaction (REQUIRED propagation, READ_COMMITTED isolation)
+    @Transactional
     public Task createTask(Long userId, Task task) {
         User user = userRepository.findById(userId)
-                .orElseThrow(() -> new RuntimeException("User not found with id: " + userId));
+                .orElseThrow(() -> new RuntimeException("User not found"));
+
         task.setUser(user);
         return taskRepository.save(task);
     }
-    
-    public List<Task> getAllTasks() {
-        return taskRepository.findAll();
-    }
-    
+
+    // Read-only transaction (optimized for reads, no dirty checking)
+    @Transactional(readOnly = true)
     public Optional<Task> getTaskById(Long id) {
         return taskRepository.findById(id);
     }
-    
-    // ========================================
-    // QUERY METHOD EXAMPLES
-    // ========================================
-    
-    public List<Task> getTasksByStatus(String status) {
-        return taskRepository.findByStatus(status);
+
+    @Transactional(readOnly = true)
+    public List<Task> getAllTasks() {
+        return taskRepository.findAll();
     }
-    
-    public List<Task> searchTasks(String keyword) {
-        return taskRepository.findByTitleContainingIgnoreCase(keyword);
-    }
-    
-    public List<Task> getTasksCreatedAfter(LocalDateTime date) {
-        return taskRepository.findByCreatedAtAfter(date);
-    }
-    
-    public List<Task> getRecentTasks(int days) {
-        LocalDateTime date = LocalDateTime.now().minusDays(days);
-        return taskRepository.findByCreatedAtAfter(date);
-    }
-    
-    public List<Task> getTasksInDateRange(LocalDateTime start, LocalDateTime end) {
-        return taskRepository.findByCreatedAtBetween(start, end);
-    }
-    
-    public Task getLatestTaskForUser(Long userId) {
-        return taskRepository.findFirstByUserIdOrderByCreatedAtDesc(userId);
-    }
-    
-    public List<Task> getTop5RecentTasksByStatus(String status) {
-        return taskRepository.findTop5ByStatusOrderByCreatedAtDesc(status);
-    }
-    
-    public long countTasksByStatus(String status) {
-        return taskRepository.countByStatus(status);
-    }
-    
-    public boolean taskExistsForUser(String title, Long userId) {
-        return taskRepository.existsByTitleAndUserId(title, userId);
-    }
-    
-    // ========================================
-    // JPQL QUERY EXAMPLES
-    // ========================================
-    
-    public List<Task> getTasksByUsername(String username) {
-        return taskRepository.findTasksByUsername(username);
-    }
-    
-    public List<Task> searchTasksByKeywordAndStatus(String keyword, String status) {
-        return taskRepository.searchTasksByKeywordAndStatus(keyword, status);
-    }
-    
-    public List<String> getAllDistinctStatuses() {
-        return taskRepository.findAllDistinctStatuses();
-    }
-    
-    public Map<String, Long> getTaskCountByStatus() {
-        List<Object[]> results = taskRepository.countTasksGroupedByStatus();
-        Map<String, Long> statusCounts = new HashMap<>();
-        for (Object[] result : results) {
-            String status = (String) result[0];
-            Long count = (Long) result[1];
-            statusCounts.put(status, count);
+
+    // Transaction with rollback on specific exception
+    @Transactional(rollbackFor = Exception.class)
+    public Task createTaskWithValidation(Long userId, Task task) {
+        if (task.getTitle() == null || task.getTitle().isEmpty()) {
+            throw new IllegalArgumentException("Title cannot be empty");
         }
-        return statusCounts;
+
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new RuntimeException("User not found"));
+
+        task.setUser(user);
+        return taskRepository.save(task);
     }
-    
-    // ========================================
-    // UPDATE/DELETE EXAMPLES
-    // ========================================
-    
-    public int bulkUpdateTaskStatus(String oldStatus, String newStatus) {
-        return taskRepository.bulkUpdateStatus(oldStatus, newStatus);
+
+    // Transaction that creates a new transaction (REQUIRES_NEW)
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public Task createTaskInNewTransaction(Long userId, Task task) {
+        // This runs in its own transaction, independent of the caller
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new RuntimeException("User not found"));
+
+        task.setUser(user);
+        return taskRepository.save(task);
     }
-    
-    public int updateTaskStatus(Long taskId, String status) {
-        return taskRepository.updateTaskStatus(taskId, status);
-    }
-    
-    public int deleteOldCompletedTasks(int daysOld) {
-        LocalDateTime cutoffDate = LocalDateTime.now().minusDays(daysOld);
-        return taskRepository.deleteOldTasksByStatus("DONE", cutoffDate);
-    }
-    
+
+    // Multiple operations in one transaction
     @Transactional
-    public void deleteTasksByStatus(String status) {
-        taskRepository.deleteByStatus(status);
+    public void createMultipleTasks(Long userId, List<Task> tasks) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new RuntimeException("User not found"));
+
+        for (Task task : tasks) {
+            task.setUser(user);
+            taskRepository.save(task);
+        }
+        // If any save fails, ALL are rolled back
     }
-    
+
     // ========================================
-    // PAGINATION EXAMPLES
+    // OPTIMISTIC LOCKING EXAMPLE
     // ========================================
-    
-    public Page<Task> getTasksWithPagination(int page, int size) {
-        Pageable pageable = PageRequest.of(page, size);
-        return taskRepository.findAll(pageable);
-    }
-    
-    public Page<Task> getTasksByStatusWithPagination(String status, int page, int size) {
-        Pageable pageable = PageRequest.of(page, size, Sort.by("createdAt").descending());
-        return taskRepository.findByStatus(status, pageable);
-    }
-    
-    public Page<Task> searchTasksWithPagination(String keyword, int page, int size, String sortBy) {
-        Sort sort = Sort.by(Sort.Direction.DESC, sortBy);
-        Pageable pageable = PageRequest.of(page, size, sort);
-        return taskRepository.searchTasks(keyword, pageable);
-    }
-    
-    // Existing methods (same as before)
-    public List<Task> getTasksByUserId(Long userId) {
-        return taskRepository.findByUserId(userId);
-    }
-    
-    public List<Task> getUserTasksByStatus(Long userId, String status) {
-        return taskRepository.findByStatusAndUserId(status, userId);
-    }
-    
-    public List<Task> getTasksByTagName(String tagName) {
-        return taskRepository.findByTagName(tagName);
-    }
-    
-    public Task updateTask(Long id, Task taskDetails) {
+
+    @Transactional
+    public Task updateTaskWithOptimisticLock(Long id, Task taskDetails) {
         Task task = taskRepository.findById(id)
-                .orElseThrow(() -> new RuntimeException("Task not found with id: " + id));
-        
+                .orElseThrow(() -> new RuntimeException("Task not found"));
+
+        // Update fields
         task.setTitle(taskDetails.getTitle());
         task.setDescription(taskDetails.getDescription());
         task.setStatus(taskDetails.getStatus());
-        
-        return taskRepository.save(task);
+        task.setPriority(taskDetails.getPriority());
+
+        try {
+            return taskRepository.save(task);
+        } catch (ObjectOptimisticLockingFailureException e) {
+            throw new RuntimeException("Task was updated by another user. Please refresh and try again.");
+        }
     }
-    
+
+    // Retry logic for optimistic locking failures
+    @Transactional
+    public Task updateTaskWithRetry(Long id, Task taskDetails, int maxRetries) {
+        int attempts = 0;
+
+        while (attempts < maxRetries) {
+            try {
+                Task task = taskRepository.findById(id)
+                        .orElseThrow(() -> new RuntimeException("Task not found"));
+
+                task.setTitle(taskDetails.getTitle());
+                task.setDescription(taskDetails.getDescription());
+                task.setStatus(taskDetails.getStatus());
+
+                return taskRepository.save(task);
+
+            } catch (ObjectOptimisticLockingFailureException e) {
+                attempts++;
+                if (attempts >= maxRetries) {
+                    throw new RuntimeException("Failed to update task after " + maxRetries + " attempts");
+                }
+                // Wait a bit before retrying
+                try {
+                    Thread.sleep(100);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        }
+
+        throw new RuntimeException("Update failed");
+    }
+
+    // ========================================
+    // SPECIFICATIONS (DYNAMIC QUERIES)
+    // ========================================
+
+    @Transactional(readOnly = true)
+    public List<Task> searchTasks(TaskSearchDTO searchDTO) {
+        Specification<Task> spec = null;
+
+        if (searchDTO.getStatus() != null) {
+            spec = Specification.where(TaskSpecification.hasStatus(searchDTO.getStatus()));
+        }
+
+        if (searchDTO.getPriority() != null) {
+            spec = (spec == null) ? Specification.where(TaskSpecification.hasPriority(searchDTO.getPriority()))
+                    : spec.and(TaskSpecification.hasPriority(searchDTO.getPriority()));
+        }
+
+        if (searchDTO.getUserId() != null) {
+            spec = (spec == null) ? Specification.where(TaskSpecification.belongsToUser(searchDTO.getUserId()))
+                    : spec.and(TaskSpecification.belongsToUser(searchDTO.getUserId()));
+        }
+
+        if (searchDTO.getKeyword() != null) {
+            Specification<Task> titleSpec = TaskSpecification.titleContains(searchDTO.getKeyword());
+            Specification<Task> descSpec = TaskSpecification.descriptionContains(searchDTO.getKeyword());
+            Specification<Task> keywordSpec = Specification.where(titleSpec).or(descSpec);
+            spec = (spec == null) ? keywordSpec : spec.and(keywordSpec);
+        }
+
+        if (searchDTO.getTagName() != null) {
+            spec = (spec == null) ? Specification.where(TaskSpecification.hasTag(searchDTO.getTagName()))
+                    : spec.and(TaskSpecification.hasTag(searchDTO.getTagName()));
+        }
+
+        if (searchDTO.getCreatedAfter() != null || searchDTO.getCreatedBefore() != null) {
+            spec = (spec == null) ? Specification.where(TaskSpecification.createdBetween(
+                    searchDTO.getCreatedAfter(),
+                    searchDTO.getCreatedBefore()))
+                    : spec.and(TaskSpecification.createdBetween(
+                            searchDTO.getCreatedAfter(),
+                            searchDTO.getCreatedBefore()));
+        }
+
+        return taskRepository.findAll(spec != null ? spec : Specification.where((root, query, cb) -> cb.conjunction()));
+    }
+
+    @Transactional(readOnly = true)
+    public Page<Task> searchTasksWithPagination(TaskSearchDTO searchDTO, Pageable pageable) {
+        Specification<Task> spec = null;
+
+        if (searchDTO.getStatus() != null) {
+            spec = Specification.where(TaskSpecification.hasStatus(searchDTO.getStatus()));
+        }
+
+        if (searchDTO.getPriority() != null) {
+            spec = (spec == null) ? Specification.where(TaskSpecification.hasPriority(searchDTO.getPriority()))
+                    : spec.and(TaskSpecification.hasPriority(searchDTO.getPriority()));
+        }
+
+        if (searchDTO.getUserId() != null) {
+            spec = (spec == null) ? Specification.where(TaskSpecification.belongsToUser(searchDTO.getUserId()))
+                    : spec.and(TaskSpecification.belongsToUser(searchDTO.getUserId()));
+        }
+
+        if (searchDTO.getKeyword() != null) {
+            Specification<Task> titleSpec = TaskSpecification.titleContains(searchDTO.getKeyword());
+            Specification<Task> descSpec = TaskSpecification.descriptionContains(searchDTO.getKeyword());
+            Specification<Task> keywordSpec = Specification.where(titleSpec).or(descSpec);
+            spec = (spec == null) ? keywordSpec : spec.and(keywordSpec);
+        }
+
+        return taskRepository.findAll(spec != null ? spec : Specification.where((root, query, cb) -> cb.conjunction()),
+                pageable);
+    }
+
+    // ========================================
+    // OTHER OPERATIONS
+    // ========================================
+
     @Transactional
     public Task addTagToTask(Long taskId, Long tagId) {
         Task task = taskRepository.findById(taskId)
                 .orElseThrow(() -> new RuntimeException("Task not found"));
         Tag tag = tagRepository.findById(tagId)
                 .orElseThrow(() -> new RuntimeException("Tag not found"));
-        
+
         task.addTag(tag);
         return taskRepository.save(task);
     }
-    
+
     @Transactional
-    public Task removeTagFromTask(Long taskId, Long tagId) {
-        Task task = taskRepository.findById(taskId)
-                .orElseThrow(() -> new RuntimeException("Task not found"));
-        Tag tag = tagRepository.findById(tagId)
-                .orElseThrow(() -> new RuntimeException("Tag not found"));
-        
-        task.removeTag(tag);
-        return taskRepository.save(task);
-    }
-    
     public void deleteTask(Long id) {
         taskRepository.deleteById(id);
+    }
+
+    // Batch operation
+    @Transactional
+    public void deleteMultipleTasks(List<Long> taskIds) {
+        taskIds.forEach(id -> taskRepository.deleteById(id));
     }
 }
